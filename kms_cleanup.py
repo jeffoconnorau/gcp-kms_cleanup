@@ -8,6 +8,7 @@ Supports targeting specific regions and displays equivalent gcloud commands.
 import sys
 import subprocess
 import json
+import argparse
 from google.oauth2.credentials import Credentials
 from googleapiclient import discovery
 from tabulate import tabulate
@@ -280,27 +281,49 @@ def permanently_delete_key_and_versions(service, key_info):
     else:
         print(f"  -> Cannot delete parent CryptoKey {key_info['key_id']} because {non_deletable_versions_count} version(s) remain.")
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="GCP KMS Cleanup and Audit Tool")
+    parser.add_argument("-p", "--project", help="GCP Project ID to audit")
+    parser.add_argument("-r", "--regions", help="Comma-separated list of target regions/locations (default: all)")
+    parser.add_argument("-a", "--action", choices=["disable", "destroy", "both", "delete"], help="Action to perform: disable, destroy, both, delete")
+    parser.add_argument("-k", "--keys", help="Target keys: 'all', or comma-separated list of index numbers (e.g. '1,3')")
+    parser.add_argument("-m", "--mode", choices=["dry-run", "execute", "both"], help="Execution mode: dry-run, execute, both")
+    parser.add_argument("-y", "--confirm", action="store_true", help="Auto-confirm execution (bypasses the confirmation prompt)")
+    return parser.parse_args()
+
 def main():
-    print("====================================================")
-    print("             KMS Key Audit & Cleanup Tool           ")
-    print("====================================================")
+    args = parse_arguments()
     
     # 1. Authentication
     token = get_gcloud_token()
     credentials = Credentials(token)
     service = discovery.build('cloudkms', 'v1', credentials=credentials)
     
-    # 2. Get target project ID and target region
-    default_project = get_active_gcloud_project()
-    project_id = input(f"Enter the GCP Project ID to audit [{default_project}]: ").strip()
-    if not project_id:
-        project_id = default_project
+    # Determine if running in CLI mode (any argument provided except config flags or just basic launch)
+    # We can check if args has any defined values
+    is_cli_mode = bool(args.project or args.regions or args.action or args.keys or args.mode or args.confirm)
+    
+    if is_cli_mode:
+        project_id = args.project
+        if not project_id:
+            project_id = get_active_gcloud_project()
         
-    target_locations_input = input("Enter specific region/location(s) (comma-separated, e.g. us-east4, global) or press Enter for ALL: ").strip()
-    if target_locations_input:
-        target_locations = [x.strip() for x in target_locations_input.split(',') if x.strip()]
+        target_locations = [x.strip() for x in args.regions.split(',') if x.strip()] if args.regions else None
     else:
-        target_locations = None
+        print("====================================================")
+        print("             KMS Key Audit & Cleanup Tool           ")
+        print("====================================================")
+        # 2. Get target project ID and target region
+        default_project = get_active_gcloud_project()
+        project_id = input(f"Enter the GCP Project ID to audit [{default_project}]: ").strip()
+        if not project_id:
+            project_id = default_project
+            
+        target_locations_input = input("Enter specific region/location(s) (comma-separated, e.g. us-east4, global) or press Enter for ALL: ").strip()
+        if target_locations_input:
+            target_locations = [x.strip() for x in target_locations_input.split(',') if x.strip()]
+        else:
+            target_locations = None
         
     # 3. Perform Audit
     keys = audit_kms_keys(service, project_id, target_locations)
@@ -315,13 +338,14 @@ def main():
         loc = k['location']
         region_summary[loc] = region_summary.get(loc, 0) + 1
         
-    print(f"\n================ AUDIT SUMMARY ================")
-    print(f"Found {len(keys)} KMS key(s) in {len(region_summary)} region(s):")
-    for region, count in sorted(region_summary.items()):
-        print(f" - {region}: {count} key(s)")
-    print(f"================================================")
-    
-    input("\nPress Enter to view the full details table...")
+    if not is_cli_mode:
+        print(f"\n================ AUDIT SUMMARY ================")
+        print(f"Found {len(keys)} KMS key(s) in {len(region_summary)} region(s):")
+        for region, count in sorted(region_summary.items()):
+            print(f" - {region}: {count} key(s)")
+        print(f"================================================")
+        
+        input("\nPress Enter to view the full details table...")
     
     # 4. Display Audit Table
     headers = ["#", "Location", "Key Ring", "Key ID", "Purpose", "Versions State", "Labels", "Del. Delay"]
@@ -341,25 +365,34 @@ def main():
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
     
     # 5. Prompt for Action
-    print("\nSelect an action to perform:")
-    print("1. Disable (Expire) enabled key versions")
-    print("2. Schedule Destruction of active key versions")
-    print("3. Disable & Schedule Destruction of active key versions")
-    print("4. Permanently Delete destroyed/failed versions and parent keys")
-    print("5. Exit")
-    
-    action_choice = input("Enter choice (1/2/3/4/5): ").strip()
-    
-    if action_choice not in ['1', '2', '3', '4']:
-        print("Exiting tool. No actions performed.")
-        return
+    if is_cli_mode:
+        action_choice_str = args.action
+        if not action_choice_str:
+            print("Error: --action or -a argument is required in CLI mode.", file=sys.stderr)
+            sys.exit(1)
+        action_map = {"disable": "1", "destroy": "2", "both": "3", "delete": "4"}
+        action_choice = action_map[action_choice_str]
+    else:
+        print("\nSelect an action to perform:")
+        print("1. Disable (Expire) enabled key versions")
+        print("2. Schedule Destruction of active key versions")
+        print("3. Disable & Schedule Destruction of active key versions")
+        print("4. Permanently Delete destroyed/failed versions and parent keys")
+        print("5. Exit")
+        
+        action_choice = input("Enter choice (1/2/3/4/5): ").strip()
+        if action_choice not in ['1', '2', '3', '4']:
+            print("Exiting tool. No actions performed.")
+            return
         
     # 6. Select Keys
-    print("\nSelect the keys to target:")
-    print("- Type 'all' to select all keys")
-    print("- Or enter a comma-separated list of numbers (e.g. 1,3,4)")
-    
-    selection_input = input("Enter selection: ").strip()
+    if is_cli_mode:
+        selection_input = args.keys or "all"
+    else:
+        print("\nSelect the keys to target:")
+        print("- Type 'all' to select all keys")
+        print("- Or enter a comma-separated list of numbers (e.g. 1,3,4)")
+        selection_input = input("Enter selection: ").strip()
     
     target_keys = []
     if selection_input.lower() == 'all':
@@ -393,18 +426,18 @@ def main():
         print(f" - {tk['key_id']} (in KeyRing {tk['key_ring']}, Location {tk['location']})")
         
     # Ask execution mode: print commands or execute directly
-    print("\nSelect execution mode:")
-    print("1. Print equivalent gcloud CLI commands (Dry-run / Learn)")
-    print("2. Execute actions directly via this script")
-    print("3. Both (Print commands first, then execute)")
-    
-    mode_choice = input("Enter choice (1/2/3) [1]: ").strip()
-    if not mode_choice:
-        mode_choice = '1'
-        
-    if mode_choice not in ['1', '2', '3']:
-        print("Invalid choice. Defaulting to print commands (Dry-run).")
-        mode_choice = '1'
+    if is_cli_mode:
+        mode_choice_str = args.mode or "dry-run"
+        mode_map = {"dry-run": "1", "execute": "2", "both": "3"}
+        mode_choice = mode_map[mode_choice_str]
+    else:
+        print("\nSelect execution mode:")
+        print("1. Print equivalent gcloud CLI commands (Dry-run / Learn)")
+        print("2. Execute actions directly via this script")
+        print("3. Both (Print commands first, then execute)")
+        mode_choice = input("Enter choice (1/2/3) [1]: ").strip()
+        if not mode_choice:
+            mode_choice = '1'
         
     # Generate commands
     all_commands = []
@@ -428,7 +461,11 @@ def main():
             
     if mode_choice in ['2', '3']:
         # Confirmation prompt
-        confirm = input(f"\nAre you absolutely sure you want to execute {action_name} on GCP directly? (type 'confirm' to execute): ").strip()
+        if is_cli_mode and args.confirm:
+            confirm = "confirm"
+        else:
+            confirm = input(f"\nAre you absolutely sure you want to execute {action_name} on GCP directly? (type 'confirm' to execute): ").strip()
+            
         if confirm.lower() != 'confirm':
             print("Execution cancelled.")
             return

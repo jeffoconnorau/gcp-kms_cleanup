@@ -64,6 +64,32 @@ A lightweight, interactive Python CLI tool to audit KMS keys in a Google Cloud p
 
 ---
 
+## Non-Interactive Mode (CLI Arguments)
+
+You can bypass interactive prompts by passing command-line arguments to the script. This is useful for automating cleanups in CI/CD pipelines or running quick operations from the shell.
+
+### Available Arguments:
+- `-p`, `--project`: GCP Project ID to audit (defaults to the active `gcloud` project).
+- `-r`, `--regions`: Comma-separated list of target regions/locations (e.g. `us-east4,global`).
+- `-a`, `--action`: Action to perform (`disable`, `destroy`, `both`, `delete`). Required in CLI mode.
+- `-k`, `--keys`: Targeted keys: `all` (default) or comma-separated indices (e.g. `1,2,5`).
+- `-m`, `--mode`: Execution mode (`dry-run` [default], `execute`, `both`).
+- `-y`, `--confirm`: Bypasses the confirmation prompt for actions on GCP.
+
+### Examples:
+
+1. **Dry-Run (Print Commands)**: Audit `argo-tf-svc-backup` in `us-central1` and print gcloud commands to delete all keys:
+   ```bash
+   python3 kms_cleanup.py -p argo-tf-svc-backup -r us-central1 -a delete -m dry-run
+   ```
+
+2. **Auto-Executed Cleanup**: Disable all versions of keys 1 and 2 in `us-central1` directly without any prompts:
+   ```bash
+   python3 kms_cleanup.py -p argo-tf-svc-backup -r us-central1 -a disable -k 1,2 -m execute -y
+   ```
+
+---
+
 ## Deletion Safety & Cleanup Duration
 
 In Google Cloud KMS, **CryptoKeys cannot be deleted directly**. Instead, their individual **CryptoKeyVersions** must be scheduled for destruction.
