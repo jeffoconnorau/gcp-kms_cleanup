@@ -26,7 +26,7 @@ def get_active_gcloud_project():
         project = subprocess.check_output(["gcloud", "config", "get-value", "project"], text=True).strip()
         return project
     except Exception:
-        return "argo-svc-dev-1"
+        return "proj-dev-1"
 
 def parse_duration(duration_str):
     """Converts a duration string like '2592000s' or '86400s' into days (float)."""
