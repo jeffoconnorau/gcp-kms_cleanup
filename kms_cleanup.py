@@ -155,7 +155,7 @@ def audit_kms_keys(service, project_id, target_locations=None):
 
 def generate_gcloud_commands(action_type, project_id, key_info):
     """
-    action_type: 'disable', 'destroy', or 'both'
+    action_type: 'disable', 'destroy', 'both', or 'delete'
     """
     commands = []
     parts = key_info['name'].split('/')
@@ -163,16 +163,32 @@ def generate_gcloud_commands(action_type, project_id, key_info):
     keyring_id = parts[5]
     key_id = parts[7]
     
-    for v in key_info['versions']:
-        v_name = v['name']
-        v_state = v['state']
-        v_id = v_name.split('/')[-1]
+    if action_type == 'delete':
+        non_deletable = []
+        for v in key_info['versions']:
+            v_name = v['name']
+            v_state = v['state']
+            v_id = v_name.split('/')[-1]
+            
+            if v_state in ['DESTROYED', 'IMPORT_FAILED', 'GENERATION_FAILED']:
+                commands.append(f"gcloud kms keys versions delete {v_id} --key={key_id} --keyring={keyring_id} --location={location_id} --project={project_id}")
+            else:
+                non_deletable.append(v)
         
-        if action_type in ['disable', 'both'] and v_state == 'ENABLED':
-            commands.append(f"gcloud kms keys versions disable {v_id} --key={key_id} --keyring={keyring_id} --location={location_id} --project={project_id}")
-        
-        if action_type in ['destroy', 'both'] and v_state in ['ENABLED', 'DISABLED']:
-            commands.append(f"gcloud kms keys versions destroy {v_id} --key={key_id} --keyring={keyring_id} --location={location_id} --project={project_id}")
+        # If there are no versions remaining that cannot be deleted, generate the key deletion command
+        if not non_deletable:
+            commands.append(f"gcloud kms keys delete {key_id} --keyring={keyring_id} --location={location_id} --project={project_id}")
+    else:
+        for v in key_info['versions']:
+            v_name = v['name']
+            v_state = v['state']
+            v_id = v_name.split('/')[-1]
+            
+            if action_type in ['disable', 'both'] and v_state == 'ENABLED':
+                commands.append(f"gcloud kms keys versions disable {v_id} --key={key_id} --keyring={keyring_id} --location={location_id} --project={project_id}")
+            
+            if action_type in ['destroy', 'both'] and v_state in ['ENABLED', 'DISABLED']:
+                commands.append(f"gcloud kms keys versions destroy {v_id} --key={key_id} --keyring={keyring_id} --location={location_id} --project={project_id}")
             
     return commands
 
@@ -225,6 +241,44 @@ def destroy_key_versions(service, key_info):
                 
     if modified_count == 0:
         print("  (No versions were in ENABLED or DISABLED state)")
+
+def permanently_delete_key_and_versions(service, key_info):
+    print(f"\nProcessing permanent deletion for key: {key_info['key_id']}")
+    versions_client = service.projects().locations().keyRings().cryptoKeys().cryptoKeyVersions()
+    keys_client = service.projects().locations().keyRings().cryptoKeys()
+    
+    key_name = key_info['name']
+    
+    deleted_versions_count = 0
+    non_deletable_versions_count = 0
+    
+    for v in key_info['versions']:
+        v_name = v['name']
+        v_state = v['state']
+        short_v_name = v_name.split('/')[-1]
+        
+        if v_state in ['DESTROYED', 'IMPORT_FAILED', 'GENERATION_FAILED']:
+            try:
+                print(f"  -> Permanently deleting version {short_v_name}...")
+                versions_client.delete(name=v_name).execute()
+                print(f"     [SUCCESS] Version {short_v_name} has been permanently deleted.")
+                deleted_versions_count += 1
+            except Exception as e:
+                print(f"     [ERROR] Failed to delete version {short_v_name}: {e}")
+                non_deletable_versions_count += 1
+        else:
+            print(f"  -> Version {short_v_name} is in state '{v_state}' and cannot be deleted yet (requires DESTROYED, IMPORT_FAILED, or GENERATION_FAILED).")
+            non_deletable_versions_count += 1
+            
+    if non_deletable_versions_count == 0:
+        try:
+            print(f"  -> All versions deleted. Deleting parent CryptoKey {key_info['key_id']}...")
+            keys_client.delete(name=key_name).execute()
+            print(f"     [SUCCESS] CryptoKey {key_info['key_id']} has been permanently deleted.")
+        except Exception as e:
+            print(f"     [ERROR] Failed to delete parent CryptoKey {key_info['key_id']}: {e}")
+    else:
+        print(f"  -> Cannot delete parent CryptoKey {key_info['key_id']} because {non_deletable_versions_count} version(s) remain.")
 
 def main():
     print("====================================================")
@@ -291,11 +345,12 @@ def main():
     print("1. Disable (Expire) enabled key versions")
     print("2. Schedule Destruction of active key versions")
     print("3. Disable & Schedule Destruction of active key versions")
-    print("4. Exit")
+    print("4. Permanently Delete destroyed/failed versions and parent keys")
+    print("5. Exit")
     
-    action_choice = input("Enter choice (1/2/3/4): ").strip()
+    action_choice = input("Enter choice (1/2/3/4/5): ").strip()
     
-    if action_choice not in ['1', '2', '3']:
+    if action_choice not in ['1', '2', '3', '4']:
         print("Exiting tool. No actions performed.")
         return
         
@@ -325,8 +380,13 @@ def main():
         print("No keys selected. Exiting.")
         return
         
-    action_type = "disable" if action_choice == '1' else ("destroy" if action_choice == '2' else "both")
-    action_name = "DISABLE" if action_choice == '1' else ("SCHEDULE DESTRUCTION" if action_choice == '2' else "DISABLE & SCHEDULE DESTRUCTION")
+    action_type = "disable" if action_choice == '1' else ("destroy" if action_choice == '2' else ("both" if action_choice == '3' else "delete"))
+    action_name = {
+        '1': "DISABLE",
+        '2': "SCHEDULE DESTRUCTION",
+        '3': "DISABLE & SCHEDULE DESTRUCTION",
+        '4': "PERMANENT DELETE"
+    }[action_choice]
     
     print(f"\nYou have selected to {action_name} versions for the following {len(target_keys)} key(s):")
     for tk in target_keys:
@@ -362,6 +422,9 @@ def main():
         if action_type in ["destroy", "both"] and all_commands:
             print("\nNOTE: Executing these gcloud commands will schedule deletion.")
             print("Key versions will be permanently destroyed after their safety delays (indicated in the Del. Delay column).")
+        elif action_type == "delete" and all_commands:
+            print("\nNOTE: Executing these gcloud commands will immediately and permanently delete the targeted versions/keys.")
+            print("This action is completely IRREVERSIBLE.")
             
     if mode_choice in ['2', '3']:
         # Confirmation prompt
@@ -375,9 +438,11 @@ def main():
                 disable_key_versions(service, tk)
             elif action_choice == '2':
                 destroy_key_versions(service, tk)
-            else:
+            elif action_choice == '3':
                 disable_key_versions(service, tk)
                 destroy_key_versions(service, tk)
+            elif action_choice == '4':
+                permanently_delete_key_and_versions(service, tk)
                 
         print("\nDirect execution completed.")
     else:

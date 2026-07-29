@@ -51,7 +51,8 @@ A lightweight, interactive Python CLI tool to audit KMS keys in a Google Cloud p
    - `1`: Disable (Expire) enabled key versions.
    - `2`: Schedule destruction of active key versions.
    - `3`: Disable & Schedule destruction of active key versions.
-   - `4`: Exit.
+   - `4`: Permanently Delete destroyed/failed versions and parent keys.
+   - `5`: Exit.
 6. **Select Target Keys**:
    - Type `all` to target all keys.
    - Or enter comma-separated numbers (e.g. `1, 3, 5`).
