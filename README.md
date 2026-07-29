@@ -44,7 +44,7 @@ A lightweight, interactive Python CLI tool to audit KMS keys in a Google Cloud p
    python3 kms_cleanup.py
    ```
 
-2. **Enter Project ID**: Enter the target project ID (e.g., `argo-svc-dev-1`). If you press Enter, it defaults to the active project set in your `gcloud` CLI context.
+2. **Enter Project ID**: Enter the target project ID (e.g., `proj-dev-1`). If you press Enter, it defaults to the active project set in your `gcloud` CLI context.
 3. **Specify Region(s)**: Press Enter to scan all regions, or type one or more specific locations/regions separated by commas (e.g., `australia-southeast1, australia-southeast2`) to target.
 4. **Review Summary & Details**: Check the counts summary, press Enter, and inspect the table showing all found keys.
 5. **Choose Action**:
@@ -78,14 +78,14 @@ You can bypass interactive prompts by passing command-line arguments to the scri
 
 ### Examples:
 
-1. **Dry-Run (Print Commands)**: Audit `argo-tf-svc-backup` in `us-central1` and print gcloud commands to delete all keys:
+1. **Dry-Run (Print Commands)**: Audit `proj-dev-1` in `us-central1` and print gcloud commands to delete all keys:
    ```bash
-   python3 kms_cleanup.py -p argo-tf-svc-backup -r us-central1 -a delete -m dry-run
+   python3 kms_cleanup.py -p proj-dev-1 -r us-central1 -a delete -m dry-run
    ```
 
 2. **Auto-Executed Cleanup**: Disable all versions of keys 1 and 2 in `us-central1` directly without any prompts:
    ```bash
-   python3 kms_cleanup.py -p argo-tf-svc-backup -r us-central1 -a disable -k 1,2 -m execute -y
+   python3 kms_cleanup.py -p proj-dev-1 -r us-central1 -a disable -k 1,2 -m execute -y
    ```
 
 ---
@@ -97,6 +97,6 @@ In Google Cloud KMS, **CryptoKeys cannot be deleted directly**. Instead, their i
 - **Disabling (Expiration)**: **Immediate**. The state of the key version changes to `DISABLED` and it can no longer be used for encryption/decryption immediately. This action is fully reversible.
 - **Permanent Destruction**: **Delayed**. When scheduled for destruction, the key version changes to `DESTROY_SCHEDULED` state.
   - **How long does it take?** It depends on the key's `destroyScheduledDuration` configuration. The default for newly created keys is **24 hours**, but it can be configured up to **120 days**.
-  - In `argo-svc-dev-1`, many keys (e.g. `kek` keys) are configured with a safety delay of `2592000s` (**30 days**).
+  - In `proj-dev-1`, many keys (e.g. `kek` keys) are configured with a safety delay of `2592000s` (**30 days**).
   - During this safety period, the keys can be recovered using the KMS Restore API.
   - After the safety period passes, the key material is **permanently and irreversibly destroyed** (state becomes `DESTROYED`).
